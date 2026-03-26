@@ -1,0 +1,150 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ConversationType {
+  direct
+  group
+}
+
+enum ParticipantRole {
+  member
+  admin
+}
+
+enum ChatMessageType {
+  text
+  image
+  video
+  audio
+  file
+  system
+}
+
+model User {
+  id                    Int                       @id @default(autoincrement())
+  name                  String                    @db.VarChar(100)
+  email                 String                    @unique @db.VarChar(255)
+  password              String                    @db.VarChar(255)
+  createdAt             DateTime                  @default(now()) @map("created_at") @db.Timestamp(3)
+  updatedAt             DateTime                  @updatedAt @map("updated_at") @db.Timestamp(3)
+  logins                Login[]
+  participants          ConversationParticipant[]
+  sentMessages          Message[]                 @relation("SentMessages")
+  createdConversations  Conversation[]            @relation("ConversationCreatedBy")
+  directPairsAsUser1    DirectConversationPair[]  @relation("DirectPairUser1")
+  directPairsAsUser2    DirectConversationPair[]  @relation("DirectPairUser2")
+
+  @@map("Users")
+}
+
+model Login {
+  loginId      Int      @id @default(autoincrement()) @map("login_id")
+  deviceType   String   @default("unknown") @db.VarChar(50)
+  deviceIP     String?  @db.VarChar(45)
+  refreshToken String?  @unique @db.VarChar(255)
+  userId       Int      @map("user_id")
+  expTime      DateTime @map("exp_time") @db.Timestamp(3)
+  mfaEnabled   Boolean  @default(false) @map("mfaEnabled")
+  mfaSecret    String?  @db.VarChar(255) @map("mfaSecret")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamp(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamp(3)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("Logins")
+  @@index([refreshToken])
+  @@index([userId])
+  @@index([expTime])
+  @@unique([userId, deviceType])
+}
+
+model Conversation {
+  id                     Int                     @id @default(autoincrement())
+  type                   ConversationType           @default(direct)
+  createdById            Int?                       @map("created_by")
+  title                  String?                    @db.VarChar(255)
+  lastMessageId          Int?                    @unique @map("last_message_id")
+  lastMessageAt          DateTime?                  @map("last_message_at") @db.Timestamp(3)
+  createdAt              DateTime                   @default(now()) @map("created_at") @db.Timestamp(3)
+  updatedAt              DateTime                   @updatedAt @map("updated_at") @db.Timestamp(3)
+  createdBy              User?                      @relation("ConversationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  lastMessage            Message?                   @relation("ConversationLastMessage", fields: [lastMessageId], references: [id], onDelete: SetNull)
+  participants           ConversationParticipant[]
+  messages               Message[]                  @relation("ConversationMessages")
+  directConversationPair DirectConversationPair?
+
+  @@map("Conversations")
+  @@index([lastMessageAt], map: "idx_conversations_last_message_at")
+  @@index([type], map: "idx_conversations_type")
+}
+
+model ConversationParticipant {
+  conversationId    Int        @map("conversation_id")
+  userId            Int           @map("user_id")
+  role              ParticipantRole @default(member)
+  joinedAt          DateTime      @default(now()) @map("joined_at") @db.Timestamp(3)
+  lastReadMessageId Int?       @map("last_read_message_id")
+  lastReadAt        DateTime?     @map("last_read_at") @db.Timestamp(3)
+  isMuted           Boolean       @default(false) @map("is_muted")
+  isArchived        Boolean       @default(false) @map("is_archived")
+  conversation      Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadMessage   Message?      @relation("ParticipantLastReadMessage", fields: [lastReadMessageId], references: [id], onDelete: SetNull)
+
+  @@map("ConversationParticipants")
+  @@id([conversationId, userId])
+  @@index([userId], map: "idx_cp_user")
+  @@index([userId, isArchived], map: "idx_cp_user_archived")
+  @@index([conversationId], map: "idx_cp_conversation")
+}
+
+model Message {
+  id                      Int                     @id @default(autoincrement())
+  conversationId          Int                     @map("conversation_id")
+  senderId                Int                        @map("sender_id")
+  messageType             ChatMessageType            @default(text) @map("message_type")
+  content                 String?
+  mediaUrl                String?                    @map("media_url") @db.VarChar(1000)
+  thumbnailUrl            String?                    @map("thumbnail_url") @db.VarChar(1000)
+  replyToMessageId        Int?                    @map("reply_to_message_id")
+  clientMessageId         String?                    @map("client_message_id") @db.VarChar(100)
+  editedAt                DateTime?                  @map("edited_at") @db.Timestamp(3)
+  deletedAt               DateTime?                  @map("deleted_at") @db.Timestamp(3)
+  createdAt               DateTime                   @default(now()) @map("created_at") @db.Timestamp(3)
+  updatedAt               DateTime                   @updatedAt @map("updated_at") @db.Timestamp(3)
+  conversation            Conversation               @relation("ConversationMessages", fields: [conversationId], references: [id], onDelete: Cascade)
+  sender                  User                       @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  replyToMessage          Message?                   @relation("MessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies                 Message[]                  @relation("MessageReplies")
+  lastMessageForConversation Conversation?           @relation("ConversationLastMessage")
+  readByParticipants      ConversationParticipant[]  @relation("ParticipantLastReadMessage")
+
+  @@map("Messages")
+  @@index([conversationId, createdAt, id], map: "idx_messages_conversation_created")
+  @@index([senderId], map: "idx_messages_sender")
+  @@index([replyToMessageId], map: "idx_messages_reply")
+  @@unique([senderId, clientMessageId], map: "uq_sender_client_message")
+}
+
+model DirectConversationPair {
+  conversationId Int       @id @map("conversation_id")
+  user1Id        Int          @map("user1_id")
+  user2Id        Int          @map("user2_id")
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user1          User         @relation("DirectPairUser1", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2          User         @relation("DirectPairUser2", fields: [user2Id], references: [id], onDelete: Cascade)
+
+  @@map("DirectConversationPairs")
+  @@unique([user1Id, user2Id], map: "uq_direct_pair")
+  @@index([user1Id], map: "idx_dcp_user1")
+  @@index([user2Id], map: "idx_dcp_user2")
+}

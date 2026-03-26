@@ -1,0 +1,10 @@
+import { Router } from "express";
+import { getAuthenticatedUser, refreshToken, signin, signout, signup } from "../controllers/authController.js";
+import { requireAccessToken } from "../middleware/authMiddleware.js";
+const authRouter = Router();
+authRouter.post("/signup", signup);
+authRouter.post("/signin", signin);
+authRouter.post("/refresh-token", refreshToken);
+authRouter.post("/signout", signout);
+authRouter.get("/me", requireAccessToken, getAuthenticatedUser);
+export default authRouter;
