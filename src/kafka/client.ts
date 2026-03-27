@@ -1,7 +1,20 @@
 import { Kafka } from "kafkajs";
 import { NOTIFY_TOPICS } from "./notifyTopics.js";
-import fs from "fs";
-
+// import fs from "fs";
+import { config } from "dotenv";
+config();
+if(!process.env.KAFKA_CA) {
+  console.log("KAFKA_CA environment variable is required");
+  throw new Error("KAFKA_CA environment variable is required");
+}
+if(!process.env.KAFKA_KEY) {
+  console.log("KAFKA_KEY environment variable is required");
+  throw new Error("KAFKA_KEY environment variable is required");
+}
+if(!process.env.KAFKA_CERT) {
+  console.log("KAFKA_CERT environment variable is required");
+  throw new Error("KAFKA_CERT environment variable is required");
+}
 const kafka = new Kafka({
   clientId: process.env.KAFKA_CLIENT_ID || "chat-backend",
   brokers: [process.env.KAFKA_BROKER || "localhost:9094"],

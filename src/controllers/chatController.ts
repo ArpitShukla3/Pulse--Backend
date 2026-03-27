@@ -6,14 +6,14 @@ import { ChatMessageType } from "@prisma/client";
 export async function getAllChats(req: Request, res: Response) {
     const UserReq = req as UserRequest;
     const userId = UserReq.user.id;
-    if(!userId) {
+    if (!userId) {
         res.status(400).json({ message: "User ID is required" });
         return;
     }
     const response = await recentChats(userId);
     res.json({ chats: response });
 }
-export async function createChat(req: Request, res: Response) : Promise<void> {
+export async function createChat(req: Request, res: Response): Promise<void> {
     const UserReq = req as UserRequest;
     const userId = UserReq.user.id;
     const { recipientId } = req.body;
@@ -26,12 +26,14 @@ export async function createChat(req: Request, res: Response) : Promise<void> {
     res.json({ conversationId: conversationId });
 }
 
-export async function sendMessage(req: Request, res: Response) : Promise<void> {
+export async function sendMessage(req: Request, res: Response): Promise<void> {
     const UserReq = req as UserRequest;
     const userId = UserReq.user.id;
-    const conversationId = req.params.id;
+    const conversationId = Array.isArray(req.params.id)
+        ? req.params.id[0]
+        : req.params.id;
     const { content, messageType } = req.body;
-    if (!content || !messageType || !conversationId || typeof content !== 'string' || !Object.values(ChatMessageType).includes(messageType as ChatMessageType || Array.isArray(conversationId) ))   {
+    if (!content || !messageType || !conversationId || typeof content !== 'string' || !Object.values(ChatMessageType).includes(messageType as ChatMessageType || Array.isArray(conversationId))) {
         res.status(400).json({ message: "Content and message type are required and must be strings" });
         return;
     }
@@ -43,7 +45,9 @@ export async function sendMessage(req: Request, res: Response) : Promise<void> {
 export const getThisChat = async (req: Request, res: Response) => {
     const UserReq = req as UserRequest;
     const userId = UserReq.user.id;
-    const conversationId = req.params.id;
+    const conversationId = Array.isArray(req.params.id)
+        ? req.params.id[0]
+        : req.params.id
     const offSet = req.query.offset ? parseInt(req.query.offset as string) : 0;
     if (!conversationId) {
         res.status(400).json({ message: "Conversation ID is required" });

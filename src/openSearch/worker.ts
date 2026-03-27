@@ -9,10 +9,14 @@ const consumer3 = createConsumer("opensearch-worker-group");
 export const startOpenSearchWorker = async (): Promise<void> => {
     await consumer1.connect();
     await consumer1.subscribe({ topic: NOTIFY_TOPICS.USER_CREATED, fromBeginning: true });
-
     await consumer1.run({
         eachMessage: async ({ topic, partition, message }) => {
-            const jsonString = Buffer.from(message.value).toString("utf-8");
+            if(!message ||!message.value) {
+                console.warn("Received empty message for user.created event");
+                return;
+            }
+            const messageValue = message.value.toString();
+            const jsonString = Buffer.from(messageValue).toString("utf-8");
             const data = JSON.parse(jsonString);
             const { name, email, id, version } = extractUserPayload(data);
             await indexUserDocument({ name, email, id, version });

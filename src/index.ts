@@ -1,7 +1,7 @@
 import cors from "cors";
 import dotenv from "dotenv";
 import express, { Request, Response } from "express";
-import { checkPostgresHealth, connectPostgres } from "./config/postgresConnect.js";
+// import { checkPostgresHealth, connectPostgres } from "./config/postgresConnect.js";
 import prisma from "./config/prisma.js";
 import { checkRedisHealth, connectRedis } from "./config/redisConnect.js";
 import { ensureKafkaTopics, producer } from "./kafka/client.js";
@@ -50,7 +50,7 @@ app.get("/health", async (_req: Request, res: Response) => {
 
 const startServer = async (): Promise<void> => {
   try {
-    await Promise.all([connectPostgres(), connectRedis(), prisma.$connect()]);
+    await Promise.all([connectRedis(), prisma.$connect()]);
     await ensureKafkaTopics();
     await Promise.all([producer.connect(),startNotificationWorkers(),ensureUsersIndex(),startOpenSearchWorker() ]);
     // await populateOpenSearch();
@@ -60,7 +60,7 @@ const startServer = async (): Promise<void> => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown startup error";
 
-    console.error("Failed to start server:", message);
+    console.error("Failed to start server:", message, error);
     process.exit(1);
   }
 };

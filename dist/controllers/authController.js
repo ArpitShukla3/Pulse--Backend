@@ -1,55 +1,74 @@
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import prisma from "../config/prisma.js";
-const ACCESS_TOKEN_TTL = "15m";
-const REFRESH_TOKEN_TTL_DAYS = 7;
-const accessTokenSecret = process.env.JWT_ACCESS_SECRET || "dev-access-secret-change-me";
-const refreshTokenSecret = process.env.JWT_REFRESH_SECRET || "dev-refresh-secret-change-me";
-const getRequestIp = (req) => {
-    const forwardedFor = req.headers["x-forwarded-for"];
-    if (typeof forwardedFor === "string") {
-        return forwardedFor.split(",")[0]?.trim() || null;
-    }
-    return req.ip || null;
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-const buildSafeUser = (user) => ({
-    id: user.id,
-    name: user.name,
-    email: user.email
-});
-const createAccessToken = (user) => jwt.sign({
-    sub: user.id,
-    email: user.email
-}, accessTokenSecret, { expiresIn: ACCESS_TOKEN_TTL });
-const issueSession = async (user, deviceType, deviceIP) => {
-    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
-    const login = await prisma.login.create({
-        data: {
-            userId: user.id,
-            deviceType,
-            deviceIP,
-            expTime: expiresAt
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getAuthenticatedUser = exports.signout = exports.refreshToken = exports.signin = exports.signup = void 0;
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
+const dotenv_1 = require("dotenv");
+const prisma_js_1 = __importDefault(require("../config/prisma.js"));
+const notify_js_1 = require("../notification/notify.js");
+const auth_js_1 = require("../utils/auth.js");
+const notifyProducers_js_1 = require("../kafka/notifyProducers.js");
+const syncUser_js_1 = require("../openSearch/syncUser.js");
+(0, dotenv_1.configDotenv)();
+const createLoginSession = async ({ userId, deviceType, deviceIP }) => {
+    const normalizedDeviceType = deviceType?.trim() || "unknown";
+    const expTime = (0, auth_js_1.getRefreshTokenExpiry)();
+    const existingLogin = await prisma_js_1.default.login.findFirst({
+        where: {
+            userId,
+            deviceType: normalizedDeviceType
         }
     });
-    const refreshToken = jwt.sign({
-        sub: user.id,
-        loginId: login.loginId
-    }, refreshTokenSecret, { expiresIn: `${REFRESH_TOKEN_TTL_DAYS}d` });
-    await prisma.login.update({
-        where: { loginId: login.loginId },
-        data: {
-            refreshToken,
-            expTime: expiresAt
-        }
-    });
+    const refreshToken = (0, auth_js_1.signRefreshToken)(userId, existingLogin?.loginId || 0);
+    const login = existingLogin
+        ? await prisma_js_1.default.login.update({
+            where: { loginId: existingLogin.loginId },
+            data: {
+                refreshToken,
+                expTime,
+                deviceIP
+            }
+        })
+        : await prisma_js_1.default.login.create({
+            data: {
+                userId,
+                deviceType: normalizedDeviceType,
+                deviceIP,
+                expTime,
+                refreshToken
+            }
+        });
+    const nextRefreshToken = existingLogin?.loginId === login.loginId ? refreshToken : (0, auth_js_1.signRefreshToken)(userId, login.loginId);
+    if (nextRefreshToken !== refreshToken) {
+        await prisma_js_1.default.login.update({
+            where: { loginId: login.loginId },
+            data: { refreshToken: nextRefreshToken }
+        });
+    }
     return {
-        accessToken: createAccessToken(user),
-        refreshToken,
         loginId: login.loginId,
-        expiresAt
+        refreshToken: nextRefreshToken,
+        expTime
     };
 };
-export const signup = async (req, res) => {
+const buildAuthResponse = async ({ user, deviceType, deviceIP }) => {
+    const safeUser = (0, auth_js_1.buildAuthenticatedUser)(user);
+    const session = await createLoginSession({
+        userId: user.id,
+        deviceType,
+        deviceIP
+    });
+    return {
+        user: safeUser,
+        accessToken: (0, auth_js_1.signAccessToken)(user.id),
+        refreshToken: session.refreshToken,
+        loginId: session.loginId,
+        refreshTokenExpiresAt: session.expTime
+    };
+};
+const signup = async (req, res) => {
     try {
         const { name, email, password, deviceType } = req.body;
         if (!name || !email || !password) {
@@ -58,7 +77,7 @@ export const signup = async (req, res) => {
             });
             return;
         }
-        const existingUser = await prisma.user.findUnique({
+        const existingUser = await prisma_js_1.default.user.findUnique({
             where: { email }
         });
         if (existingUser) {
@@ -67,28 +86,50 @@ export const signup = async (req, res) => {
             });
             return;
         }
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const user = await prisma.user.create({
+        const hashedPassword = await bcryptjs_1.default.hash(password, 10);
+        const user = await prisma_js_1.default.user.create({
             data: {
                 name,
                 email,
                 password: hashedPassword
+            },
+            select: {
+                id: true,
+                name: true,
+                email: true
             }
         });
-        const safeUser = buildSafeUser(user);
-        const session = await issueSession(safeUser, deviceType || null, getRequestIp(req));
+        const auth = await buildAuthResponse({
+            user,
+            deviceType,
+            deviceIP: (0, auth_js_1.getRequestIp)(req)
+        });
+        await (0, notify_js_1.notify)({
+            typeOfMessage: "signup-verification",
+            channel: "email",
+            addr: email,
+            subject: "no-Reply",
+            content: "Sign up clicking on this link: http://localhost:5173/login",
+            metadata: {
+                userId: String(user.id)
+            }
+        });
+        const payload = (0, syncUser_js_1.createUserPayload)(name, email, user.id);
+        (0, notifyProducers_js_1.publishUserSync)(payload);
         res.status(201).json({
             message: "Signup successful",
-            user: safeUser,
-            tokens: session
+            ...auth
         });
     }
     catch (error) {
         const message = error instanceof Error ? error.message : "Signup failed";
-        res.status(500).json({ message });
+        res.status(500).json({
+            message
+        });
     }
 };
-export const signin = async (req, res) => {
+exports.signup = signup;
+const signin = async (req, res) => {
     try {
         const { email, password, deviceType } = req.body;
         if (!email || !password) {
@@ -97,8 +138,14 @@ export const signin = async (req, res) => {
             });
             return;
         }
-        const user = await prisma.user.findUnique({
-            where: { email }
+        const user = await prisma_js_1.default.user.findUnique({
+            where: { email },
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                password: true
+            }
         });
         if (!user) {
             res.status(401).json({
@@ -106,80 +153,96 @@ export const signin = async (req, res) => {
             });
             return;
         }
-        const passwordMatches = await bcrypt.compare(password, user.password);
+        const passwordMatches = await bcryptjs_1.default.compare(password, user.password);
         if (!passwordMatches) {
             res.status(401).json({
                 message: "Invalid credentials"
             });
             return;
         }
-        const safeUser = buildSafeUser(user);
-        const session = await issueSession(safeUser, deviceType || null, getRequestIp(req));
+        const auth = await buildAuthResponse({
+            user,
+            deviceType,
+            deviceIP: (0, auth_js_1.getRequestIp)(req)
+        });
         res.status(200).json({
             message: "Signin successful",
-            user: safeUser,
-            tokens: session
+            ...auth
         });
     }
     catch (error) {
         const message = error instanceof Error ? error.message : "Signin failed";
-        res.status(500).json({ message });
+        res.status(500).json({
+            message
+        });
     }
 };
-export const refreshToken = async (req, res) => {
+exports.signin = signin;
+const refreshToken = async (req, res) => {
     try {
-        const { refreshToken: providedRefreshToken } = req.body;
+        const { refreshToken: providedRefreshToken, deviceType } = req.body;
         if (!providedRefreshToken) {
             res.status(400).json({
                 message: "refreshToken is required"
             });
             return;
         }
-        const decoded = jwt.verify(providedRefreshToken, refreshTokenSecret);
-        const login = await prisma.login.findUnique({
+        const decoded = (0, auth_js_1.verifyRefreshToken)(providedRefreshToken);
+        const login = await prisma_js_1.default.login.findUnique({
             where: { loginId: decoded.loginId },
-            include: { user: true }
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true
+                    }
+                }
+            }
         });
         if (!login ||
             !login.user ||
             login.refreshToken !== providedRefreshToken ||
-            !login.expTime ||
             login.expTime.getTime() < Date.now()) {
+            if (login?.expTime && login.expTime.getTime() < Date.now()) {
+                await prisma_js_1.default.login.delete({
+                    where: { loginId: login.loginId }
+                });
+            }
             res.status(401).json({
-                message: "Invalid refresh token"
+                message: "Refresh token expired, please signin again"
             });
             return;
         }
-        const safeUser = buildSafeUser(login.user);
-        const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
-        const newRefreshToken = jwt.sign({
-            sub: safeUser.id,
-            loginId: login.loginId
-        }, refreshTokenSecret, { expiresIn: `${REFRESH_TOKEN_TTL_DAYS}d` });
-        await prisma.login.update({
+        const expTime = (0, auth_js_1.getRefreshTokenExpiry)();
+        const nextRefreshToken = (0, auth_js_1.signRefreshToken)(login.user.id, login.loginId);
+        await prisma_js_1.default.login.update({
             where: { loginId: login.loginId },
             data: {
-                refreshToken: newRefreshToken,
-                expTime: expiresAt
+                refreshToken: nextRefreshToken,
+                expTime,
+                deviceType: deviceType || login.deviceType || undefined,
+                deviceIP: (0, auth_js_1.getRequestIp)(req)
             }
         });
+        const safeUser = (0, auth_js_1.buildAuthenticatedUser)(login.user);
         res.status(200).json({
             message: "Token refreshed",
-            tokens: {
-                accessToken: createAccessToken(safeUser),
-                refreshToken: newRefreshToken,
-                loginId: login.loginId,
-                expiresAt
-            }
+            user: safeUser,
+            accessToken: (0, auth_js_1.signAccessToken)(login.user.id),
+            refreshToken: nextRefreshToken,
+            loginId: login.loginId,
+            refreshTokenExpiresAt: expTime
         });
     }
     catch (_error) {
         res.status(401).json({
-            message: "Invalid refresh token"
+            message: "Invalid or expired refresh token, please signin again"
         });
     }
 };
-export const signout = async (req, res) => {
+exports.refreshToken = refreshToken;
+const signout = async (req, res) => {
     try {
         const { refreshToken: providedRefreshToken } = req.body;
         if (!providedRefreshToken) {
@@ -188,17 +251,52 @@ export const signout = async (req, res) => {
             });
             return;
         }
-        await prisma.login.deleteMany({
+        const login = await prisma_js_1.default.login.findUnique({
             where: {
                 refreshToken: providedRefreshToken
             }
         });
+        if (!login) {
+            res.status(404).json({
+                message: "Login session not found"
+            });
+            return;
+        }
+        await prisma_js_1.default.login.delete({
+            where: {
+                loginId: login.loginId
+            }
+        });
         res.status(200).json({
-            message: "Signed out successfully"
+            message: "Signout successful"
         });
     }
     catch (error) {
         const message = error instanceof Error ? error.message : "Signout failed";
-        res.status(500).json({ message });
+        res.status(500).json({
+            message
+        });
     }
 };
+exports.signout = signout;
+const getAuthenticatedUser = async (req, res) => {
+    const userRequest = req;
+    const user = await prisma_js_1.default.user.findUnique({
+        where: { id: userRequest.user.id },
+        select: {
+            id: true,
+            name: true,
+            email: true
+        }
+    });
+    if (!user) {
+        res.status(404).json({
+            message: "User not found"
+        });
+        return;
+    }
+    res.status(200).json({
+        user
+    });
+};
+exports.getAuthenticatedUser = getAuthenticatedUser;

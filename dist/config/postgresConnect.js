@@ -1,7 +1,13 @@
-import { configDotenv } from "dotenv";
-import pg from "pg";
-const { Pool } = pg;
-configDotenv();
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.checkPostgresHealth = exports.connectPostgres = void 0;
+const dotenv_1 = require("dotenv");
+const pg_1 = __importDefault(require("pg"));
+const { Pool } = pg_1.default;
+(0, dotenv_1.configDotenv)();
 const pool = new Pool({
     host: process.env.POSTGRES_HOST,
     port: Number(process.env.POSTGRES_PORT),
@@ -12,7 +18,7 @@ const pool = new Pool({
 pool.on("error", (error) => {
     console.error("Postgres pool error:", error.message);
 });
-export const connectPostgres = async () => {
+const connectPostgres = async () => {
     const client = await pool.connect();
     try {
         await client.query("SELECT 1");
@@ -22,7 +28,9 @@ export const connectPostgres = async () => {
         client.release();
     }
 };
-export const checkPostgresHealth = async () => {
+exports.connectPostgres = connectPostgres;
+const checkPostgresHealth = async () => {
     await pool.query("SELECT 1");
 };
-export default pool;
+exports.checkPostgresHealth = checkPostgresHealth;
+exports.default = pool;
