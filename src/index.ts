@@ -2,7 +2,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import express, { Request, Response } from "express";
 // import { checkPostgresHealth, connectPostgres } from "./config/postgresConnect.js";
-import prisma from "./config/prisma.js";
+import prisma, { checkPostgresHealth } from "./config/prisma.js";
 import { checkRedisHealth, connectRedis } from "./config/redisConnect.js";
 import { ensureKafkaTopics, producer } from "./kafka/client.js";
 import authRouter from "./routes/authRoutes.js";
